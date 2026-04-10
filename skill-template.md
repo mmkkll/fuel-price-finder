@@ -85,46 +85,68 @@ Per i nomi di località, usa geocoding (WebSearch o coordinate note) per trovare
 
 Quando Mirko chiede colonnine di ricarica o prezzi ricarica elettrica.
 
-## API
-Open Charge Map (gratuita, no API key richiesta per uso base):
+## Strategia: due fonti in parallelo, poi merge
+
+⚠️ **Open Charge Map richiede API key** (anonima → 403 dal 2026-04). Vedi sotto "Come ottenere la tua API key" — registrazione gratuita in 60 secondi. Salva la chiave in un file fuori dal repo, es. `~/mission-control/.secrets/openchargemap.key` con `chmod 600`. **Non committarla mai.**
+
+Interroga **entrambe** le fonti in parallelo, poi unisci e dedup per coordinate vicine (< 80 m):
+1. **Open Charge Map** (primaria — dati ricchi, struttura affidabile)
+2. **OpenStreetMap Overpass** via mirror Kumi (fallback / integrazione, no key)
+
+Se OCM fallisce o ha pochi risultati, mostra quelli OSM. Se entrambe rispondono, OCM ha la precedenza nei conflitti perché ha dati più completi.
+
+## API 1 — Open Charge Map (con key)
 ```
-https://api.openchargemap.io/v3/poi/?output=json&latitude=43.4833&longitude=11.7833&distance=10&distanceunit=KM&maxresults=5&compact=true&verbose=false
+https://api.openchargemap.io/v3/poi/?output=json&latitude=LAT&longitude=LON&distance=10&distanceunit=KM&maxresults=10&key=$(cat ~/mission-control/.secrets/openchargemap.key)
 ```
 
-## Parametri utili
+⚠️ **NON usare** `compact=true&verbose=false`: stripperebbe `OperatorInfo.Title`, `ConnectionType.Title` e `StatusType` (li riduce a soli ID). Usa la versione default per avere i nomi descrittivi.
+
+Parametri utili:
 - `latitude`/`longitude`: posizione di riferimento
 - `distance`: raggio in km (default skill: 10)
-- `maxresults`: numero risultati (default skill: 5)
-- `connectiontypeid`: tipo connettore (25 = Type 2, 33 = CCS, 2 = CHAdeMO)
+- `maxresults`: 10 (poi mostriamo top 5)
+- `connectiontypeid`: tipo connettore (25 = Type 2, 33 = CCS, 2 = CHAdeMO, 27 = Tesla Supercharger)
 - `levelid`: 2 = AC lenta, 3 = DC veloce
 - `operatorid`: filtra per operatore
 
-## Dati restituiti
-Ogni stazione include: nome operatore, indirizzo, coordinate, tipo connettori, potenza kW, numero punti di ricarica, stato (operativo / fuori servizio).
+Campi POI: `OperatorInfo.Title`, `AddressInfo` (Title, AddressLine1, Town, Distance), `Connections[].ConnectionType.Title + PowerKW + Quantity`, `StatusType.IsOperational`, `NumberOfPoints`. Filtra `IsOperational==true`.
+
+## API 2 — OpenStreetMap Overpass (no key, fallback)
+**Usa il mirror Kumi**, non `overpass-api.de` che spesso dà 504:
+```
+POST https://overpass.kumi.systems/api/interpreter
+data=[out:json][timeout:25];nwr["amenity"="charging_station"](around:RADIUS_M,LAT,LON);out center tags;
+```
+RADIUS_M è in metri (10 km → 10000).
+
+Tag rilevanti: `operator` / `network` / `brand`, `name`, `addr:street`+`addr:housenumber`, `addr:city`/`addr:hamlet`/`addr:village`, `capacity`, `socket:type2`, `socket:type2_combo`, `socket:chademo`, `socket:tesla_supercharger`, `socket:*:output` (potenza kW). Spesso incompleti, soprattutto per operatori minori.
+
+## Logica di merge
+1. Determina la posizione (location Telegram, coordinate, o geocoding)
+2. Esegui in parallelo: chiamata OCM + chiamata Overpass
+3. Per ogni POI calcola la distanza Haversine dal punto di riferimento
+4. Dedup: due stazioni con distanza geografica reciproca < 80 m sono la stessa (preferisci la versione OCM)
+5. Filtra OCM su `IsOperational==true`
+6. Ordina per distanza crescente
+7. Restituisci le prime 5
 
 ## Nota sui prezzi
-I prezzi di ricarica **NON** sono nell'API — variano per operatore e contratto. Mostra operatore e potenza kW, e suggerisci di verificare il prezzo sull'app dell'operatore (Enel X, BeCharge, Ionity, ecc.).
-
-## Logica
-1. Determina la posizione di riferimento (location Telegram, coordinate, o nome località → geocoding)
-2. Chiama Open Charge Map con latitude/longitude e raggio (default 10 km)
-3. Filtra solo stazioni operative (StatusType.IsOperational == true)
-4. Ordina per distanza
-5. Restituisci le prime 5 stazioni
+I prezzi di ricarica **NON** sono in nessuna delle due fonti — variano per operatore e contratto. Mostra operatore e potenza kW, e suggerisci di verificare il prezzo sull'app dell'operatore (Enel X, BeCharge, Ionity, Tesla, ecc.).
 
 ## Output format (Telegram)
 ```
 🔌 COLONNINE DI RICARICA — entro 10 km
 
 1. [Operatore] — [Nome stazione]
-   📍 [Indirizzo]
+   📍 [Indirizzo, Comune]
    📏 X.X km
    ⚡ [Connettori e potenza, es. "CCS 150 kW, Type 2 22 kW"]
    🔢 N punti di ricarica
 
 2. ...
 
-Fonte: Open Charge Map · Verifica i prezzi sull'app dell'operatore
+Fonte: Open Charge Map + OpenStreetMap · Verifica i prezzi sull'app dell'operatore
 ```
 
 ## Parametri
@@ -132,3 +154,27 @@ Fonte: Open Charge Map · Verifica i prezzi sull'app dell'operatore
 - **Numero risultati**: 5 default
 - **Posizione**: da location Telegram o nome località (geocoding)
 - **Tipo connettore**: tutti per default; filtra solo se Mirko lo chiede esplicitamente
+
+## Come ottenere la tua API key Open Charge Map (gratuita)
+
+L'accesso anonimo a OCM **non funziona più** (da aprile 2026 restituisce `403 — You must specify an API key`). La registrazione è gratuita, richiede ~60 secondi e basta un'email.
+
+1. Vai su https://openchargemap.org/site/loginprovider/beginlogin e accedi con Google, Microsoft, GitHub, Apple o un altro provider OpenID.
+2. Apri il tuo profilo → **My Apps** (o direttamente https://openchargemap.org/site/profile/applications).
+3. Clicca **Register an Application**:
+   - **App name**: qualcosa di descrittivo (es. "chief-of-staff")
+   - **Description**: scopo (es. "Personal Telegram bot for EV charging stations")
+   - **Website**: il tuo repo o `https://github.com/<your-user>`
+4. Submit. La pagina mostra la tua **API key** (formato UUID, es. `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`). Copiala.
+5. Salva la chiave **fuori dal repo**, e con permessi restrittivi:
+   ```bash
+   mkdir -p ~/mission-control/.secrets
+   echo 'TUA_CHIAVE_QUI' > ~/mission-control/.secrets/openchargemap.key
+   chmod 600 ~/mission-control/.secrets/openchargemap.key
+   ```
+   Aggiungi `.secrets/` al tuo `.gitignore`. **Non committare mai la chiave.**
+6. La skill la legge al volo con `$(cat ~/mission-control/.secrets/openchargemap.key)`.
+
+**Limiti del free tier**: qualche centinaio di richieste/ora per chiave — più che sufficiente per un assistente personale. Se serve di più, dalla stessa pagina My Apps puoi chiedere un tier superiore.
+
+**Senza chiave**: la skill usa il fallback OpenStreetMap Overpass (no key), ma i dati sono meno completi (indirizzi, capacità e connettori spesso mancanti per operatori minori).

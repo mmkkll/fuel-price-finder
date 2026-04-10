@@ -1,5 +1,7 @@
 # Build a Real-Time Fuel Price & EV Charging Finder with Claude Code
 
+> Current version: **1.1.0** — see [CHANGELOG.md](CHANGELOG.md) for the full release history.
+
 A step-by-step guide to building a fuel price lookup system that finds the cheapest gas stations — and the nearest EV charging stations — near any location, using government open data, Open Charge Map, and Telegram for on-the-go queries.
 
 ## What You'll Build

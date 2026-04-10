@@ -1,14 +1,15 @@
-# Fuel Prices — Skill
+# Fuel Prices & EV Charging — Skill
 
-Quando Mirko chiede il prezzo del carburante o il distributore più economico in zona, usa questa skill.
+Quando Mirko chiede il prezzo del carburante, il distributore più economico in zona, **oppure colonnine di ricarica elettrica**, usa questa skill.
 
 ## Trigger
 - "qual è il distributore meno caro in zona?"
 - "prezzo gasolio/benzina"
 - "distributore vicino"
 - "carburante"
-- qualsiasi richiesta su prezzi benzina/gasolio/GPL/metano
-- **Invio location Telegram**: se Mirko manda una posizione (location pin) senza testo, rispondi automaticamente con i 3 distributori gasolio self più economici vicini a quella posizione. Se aggiunge testo (es. "benzina"), usa quel carburante.
+- qualsiasi richiesta su prezzi benzina/gasolio/GPL/metano → modalità **carburante**
+- "colonnina", "colonnine", "ricarica elettrica", "EV charging", "punto di ricarica", "stazione di ricarica" → modalità **elettrico**
+- **Invio location Telegram**: se Mirko manda una posizione (location pin) senza testo, default = 3 distributori gasolio self più economici. Se il testo dice "elettrica/colonnina", usa la modalità EV. Se dice "benzina/GPL/metano", usa quel carburante.
 
 ## Fonte dati
 Il Ministero delle Imprese e del Made in Italy pubblica i prezzi dei carburanti in formato CSV:
@@ -77,3 +78,57 @@ Per i nomi di località, usa geocoding (WebSearch o coordinate note) per trovare
 - isSelf: 1 = self-service, 0 = servito
 - Formula distanza: Haversine
 - Encoding CSV: UTF-8
+
+---
+
+# Colonnine elettriche
+
+Quando Mirko chiede colonnine di ricarica o prezzi ricarica elettrica.
+
+## API
+Open Charge Map (gratuita, no API key richiesta per uso base):
+```
+https://api.openchargemap.io/v3/poi/?output=json&latitude=43.4833&longitude=11.7833&distance=10&distanceunit=KM&maxresults=5&compact=true&verbose=false
+```
+
+## Parametri utili
+- `latitude`/`longitude`: posizione di riferimento
+- `distance`: raggio in km (default skill: 10)
+- `maxresults`: numero risultati (default skill: 5)
+- `connectiontypeid`: tipo connettore (25 = Type 2, 33 = CCS, 2 = CHAdeMO)
+- `levelid`: 2 = AC lenta, 3 = DC veloce
+- `operatorid`: filtra per operatore
+
+## Dati restituiti
+Ogni stazione include: nome operatore, indirizzo, coordinate, tipo connettori, potenza kW, numero punti di ricarica, stato (operativo / fuori servizio).
+
+## Nota sui prezzi
+I prezzi di ricarica **NON** sono nell'API — variano per operatore e contratto. Mostra operatore e potenza kW, e suggerisci di verificare il prezzo sull'app dell'operatore (Enel X, BeCharge, Ionity, ecc.).
+
+## Logica
+1. Determina la posizione di riferimento (location Telegram, coordinate, o nome località → geocoding)
+2. Chiama Open Charge Map con latitude/longitude e raggio (default 10 km)
+3. Filtra solo stazioni operative (StatusType.IsOperational == true)
+4. Ordina per distanza
+5. Restituisci le prime 5 stazioni
+
+## Output format (Telegram)
+```
+🔌 COLONNINE DI RICARICA — entro 10 km
+
+1. [Operatore] — [Nome stazione]
+   📍 [Indirizzo]
+   📏 X.X km
+   ⚡ [Connettori e potenza, es. "CCS 150 kW, Type 2 22 kW"]
+   🔢 N punti di ricarica
+
+2. ...
+
+Fonte: Open Charge Map · Verifica i prezzi sull'app dell'operatore
+```
+
+## Parametri
+- **Raggio**: 10 km default, personalizzabile
+- **Numero risultati**: 5 default
+- **Posizione**: da location Telegram o nome località (geocoding)
+- **Tipo connettore**: tutti per default; filtra solo se Mirko lo chiede esplicitamente
